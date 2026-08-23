@@ -1,0 +1,13 @@
+[workspace]
+resolver = "2"
+
+members = [
+    "noid_extminer",
+    "noid_core",
+    "noid_poseidon2b",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
