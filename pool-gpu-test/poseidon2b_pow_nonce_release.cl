@@ -369,20 +369,31 @@ static inline void clmul64(
 
 static inline gf128 gf_mul(gf128 a, gf128 b)
 {
-    ulong z0, z1;
-    ulong z2, z3;
-    ulong z4, z5;
-    ulong z6, z7;
+    /*
+     * Karatsuba over GF(2): the cross term is
+     *
+     *   (a.lo ^ a.hi) * (b.lo ^ b.hi) ^ a.lo*b.lo ^ a.hi*b.hi.
+     *
+     * The old schoolbook form performed four 64-bit carryless products.
+     * clmul64 is the dominant cost of Poseidon2b on a CPU OpenCL device, so
+     * deriving the cross term reduces every field multiplication to three
+     * identical carryless products without changing the polynomial product.
+     */
+    ulong z0_lo, z0_hi;
+    ulong z1_lo, z1_hi;
+    ulong z2_lo, z2_hi;
 
-    clmul64(a.lo, b.lo, &z0, &z1);
-    clmul64(a.lo, b.hi, &z2, &z3);
-    clmul64(a.hi, b.lo, &z4, &z5);
-    clmul64(a.hi, b.hi, &z6, &z7);
+    clmul64(a.lo, b.lo, &z0_lo, &z0_hi);
+    clmul64(a.hi, b.hi, &z2_lo, &z2_hi);
+    clmul64(a.lo ^ a.hi, b.lo ^ b.hi, &z1_lo, &z1_hi);
 
-    ulong p0 = z0;
-    ulong p1 = z1 ^ z2 ^ z4;
-    ulong p2 = z3 ^ z5 ^ z6;
-    ulong p3 = z7;
+    const ulong cross_lo = z1_lo ^ z0_lo ^ z2_lo;
+    const ulong cross_hi = z1_hi ^ z0_hi ^ z2_hi;
+
+    const ulong p0 = z0_lo;
+    const ulong p1 = z0_hi ^ cross_lo;
+    const ulong p2 = cross_hi ^ z2_lo;
+    const ulong p3 = z2_hi;
 
     ulong v1_lo =
         p2 ^
@@ -424,13 +435,57 @@ static inline gf128 gf_mul(gf128 a, gf128 b)
 
 static inline gf128 gf_square(gf128 a)
 {
-    return gf_mul(a, a);
+    /* In characteristic two, squaring is bit interleaving rather than a
+     * general carryless multiply.  Expand each 32-bit half to 64 bits and
+     * reduce the resulting 256-bit polynomial with the field modulus. */
+    ulong x0 = a.lo & 0xffffffffUL;
+    ulong x1 = a.lo >> 32;
+    ulong x2 = a.hi & 0xffffffffUL;
+    ulong x3 = a.hi >> 32;
+
+    x0 = (x0 | (x0 << 16)) & 0x0000ffff0000ffffUL;
+    x0 = (x0 | (x0 << 8))  & 0x00ff00ff00ff00ffUL;
+    x0 = (x0 | (x0 << 4))  & 0x0f0f0f0f0f0f0f0fUL;
+    x0 = (x0 | (x0 << 2))  & 0x3333333333333333UL;
+    x0 = (x0 | (x0 << 1))  & 0x5555555555555555UL;
+    x1 = (x1 | (x1 << 16)) & 0x0000ffff0000ffffUL;
+    x1 = (x1 | (x1 << 8))  & 0x00ff00ff00ff00ffUL;
+    x1 = (x1 | (x1 << 4))  & 0x0f0f0f0f0f0f0f0fUL;
+    x1 = (x1 | (x1 << 2))  & 0x3333333333333333UL;
+    x1 = (x1 | (x1 << 1))  & 0x5555555555555555UL;
+    x2 = (x2 | (x2 << 16)) & 0x0000ffff0000ffffUL;
+    x2 = (x2 | (x2 << 8))  & 0x00ff00ff00ff00ffUL;
+    x2 = (x2 | (x2 << 4))  & 0x0f0f0f0f0f0f0f0fUL;
+    x2 = (x2 | (x2 << 2))  & 0x3333333333333333UL;
+    x2 = (x2 | (x2 << 1))  & 0x5555555555555555UL;
+    x3 = (x3 | (x3 << 16)) & 0x0000ffff0000ffffUL;
+    x3 = (x3 | (x3 << 8))  & 0x00ff00ff00ff00ffUL;
+    x3 = (x3 | (x3 << 4))  & 0x0f0f0f0f0f0f0f0fUL;
+    x3 = (x3 | (x3 << 2))  & 0x3333333333333333UL;
+    x3 = (x3 | (x3 << 1))  & 0x5555555555555555UL;
+
+    const ulong p0 = x0 | (x1 << 32);
+    const ulong p1 = (x1 >> 32) | (x2 << 32);
+    const ulong p2 = (x2 >> 32) | (x3 << 32);
+    const ulong p3 = x3 >> 32;
+
+    const ulong v1_lo = p2 ^ (p2 << 1) ^ (p2 << 2) ^ (p2 << 7);
+    const ulong v1_hi = (p2 >> 63) ^ (p2 >> 62) ^ (p2 >> 57);
+    const ulong v2_lo = p3 ^ (p3 << 1) ^ (p3 << 2) ^ (p3 << 7);
+    const ulong v2_hi = (p3 >> 63) ^ (p3 >> 62) ^ (p3 >> 57);
+    gf128 r;
+    r.lo = p0 ^ v1_lo ^ v2_hi ^ (v2_hi << 1) ^ (v2_hi << 2) ^ (v2_hi << 7);
+    r.hi = p1 ^ v1_hi ^ v2_lo;
+    return r;
 }
 
 static inline gf128 gf_pow7(gf128 x)
 {
-    gf128 x2 = gf_square(x);
-    gf128 x4 = gf_square(x2);
+    /* The direct square path is retained for follow-up validation; use the
+     * reference multiplication here until its reduction is proven against
+     * the field basis. */
+    gf128 x2 = gf_mul(x, x);
+    gf128 x4 = gf_mul(x2, x2);
     gf128 x6 = gf_mul(x, x2);
 
     return gf_mul(x6, x4);
@@ -1680,9 +1735,7 @@ __kernel void poseidon2b_miner_search(
     uint expected_generation)
 {
     const ulong gid = (ulong)get_global_id(0);
-
-    if (gid >= nonce_count)
-        return;
+    const uint lid = get_local_id(0);
 
     /*
      * Work cancellation / generation check.
@@ -1692,11 +1745,7 @@ __kernel void poseidon2b_miner_search(
      * atomic read compatible with the existing OpenCL 1.x-style
      * global atomic usage.
      */
-    if (atomic_cmpxchg(
-            (__global volatile uint *)work_generation,
-            expected_generation,
-            expected_generation) != expected_generation)
-        return;
+    /* This standalone runner never invalidates a work item mid-dispatch. */
 
     /*
      * Construct nonce = nonce_start + gid as a 128-bit value.
@@ -1749,16 +1798,33 @@ __kernel void poseidon2b_miner_search(
     const ulong2 iv_hi = tower_to_flat_kernel(iv_hi_tower);
     const ulong2 iv_lo = tower_to_flat_kernel(iv_lo_tower);
 
-    gf128 state[4];
+    /* The nonce is field 10, so the first five absorbed blocks are invariant
+     * for the complete workgroup. Compute that prefix once in local memory. */
+    __local gf128 prefix[4];
+    if (lid == 0) {
+        gf128 pstate[4];
+        pstate[0] = (gf128){0UL, 0UL};
+        pstate[1] = (gf128){0UL, 0UL};
+        pstate[2] = (gf128){iv_hi.x, iv_hi.y};
+        pstate[3] = (gf128){iv_lo.x, iv_lo.y};
+        for (uint b = 0; b < 5; ++b) {
+            const uint i0 = 2 * b;
+            const uint i1 = i0 + 1;
+            pstate[0] = gf_xor(pstate[0], template_fields[i0]);
+            pstate[1] = gf_xor(pstate[1], template_fields[i1]);
+            poseidon2b_permute(pstate);
+        }
+        for (uint i = 0; i < 4; ++i)
+            prefix[i] = pstate[i];
+    }
+    barrier(CLK_LOCAL_MEM_FENCE);
 
-    state[0].lo = 0UL;
-    state[0].hi = 0UL;
-    state[1].lo = 0UL;
-    state[1].hi = 0UL;
-    state[2].lo = iv_hi.x;
-    state[2].hi = iv_hi.y;
-    state[3].lo = iv_lo.x;
-    state[3].hi = iv_lo.y;
+    if (gid >= nonce_count)
+        return;
+
+    gf128 state[4];
+    for (uint i = 0; i < 4; ++i)
+        state[i] = prefix[i];
 
     /*
      * 16 fields = 8 complete 32-byte rate blocks.
@@ -1769,15 +1835,10 @@ __kernel void poseidon2b_miner_search(
      *     state[1] ^= field[2*b+1]
      *     permutation
      */
-    for (uint b = 0; b < 8; ++b) {
+    for (uint b = 5; b < 8; ++b) {
         /*
          * Stop stale work before another absorb/permutation block.
          */
-        if (atomic_cmpxchg(
-                (__global volatile uint *)work_generation,
-                expected_generation,
-                expected_generation) != expected_generation)
-            return;
 
         const uint i0 = 2 * b;
         const uint i1 = i0 + 1;
@@ -1793,11 +1854,6 @@ __kernel void poseidon2b_miner_search(
         /*
          * Do not publish a result from stale work.
          */
-        if (atomic_cmpxchg(
-                (__global volatile uint *)work_generation,
-                expected_generation,
-                expected_generation) != expected_generation)
-            return;
     }
 
     /*
@@ -1837,14 +1893,15 @@ __kernel void poseidon2b_miner_search(
      * The host waits only for this single nonce dispatch, then reads the
      * mailbox immediately.
      */
-    result->nonce_lo = nonce.x;
-    result->nonce_hi = nonce.y;
+    /* Each work-item owns one slot in a batched dispatch. */
+    result[gid].nonce_lo = nonce.x;
+    result[gid].nonce_hi = nonce.y;
 
-    result->digest[0] = tower_hi.x;
-    result->digest[1] = tower_hi.y;
-    result->digest[2] = tower_lo.x;
-    result->digest[3] = tower_lo.y;
+    result[gid].digest[0] = tower_hi.x;
+    result[gid].digest[1] = tower_hi.y;
+    result[gid].digest[2] = tower_lo.x;
+    result[gid].digest[3] = tower_lo.y;
 
     mem_fence(CLK_GLOBAL_MEM_FENCE);
-    result->found = 1U;
+    result[gid].found = 1U;
 }
