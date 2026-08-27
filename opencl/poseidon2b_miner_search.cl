@@ -4,8 +4,6 @@ typedef struct {
     ulong hi;
 } gf128;
 
-__constant ulong _unused = 0;
-
 /* Auto-generated from Rust Poseidon2b reference. */
 /* Do not edit manually. */
 
@@ -540,12 +538,6 @@ static inline void poseidon2b_permute(gf128 s[4])
         mds_full(s);
     }
 }
-
-/*
- * Clean full-permutation test entry point.
- *
- * One work-item processes one 4-element Poseidon2b state.
- */
 
 // GENERATED from noid_core/src/hardware.rs
 // Exact apply_matrix() lookup table: TOWER_TO_FLAT
@@ -1603,14 +1595,6 @@ typedef struct {
     ulong digest[4];
 } miner_result;
 
-static inline ulong2 u128_add_u64(ulong2 a, ulong b)
-{
-    ulong old_lo = a.x;
-    a.x += b;
-    a.y += (a.x < old_lo);
-    return a;
-}
-
 static inline ulong2 tower_to_flat_kernel(ulong2 v)
 {
     ulong2 r = (ulong2)(0UL, 0UL);
@@ -1687,9 +1671,6 @@ __kernel void poseidon2b_miner_search(
     const ulong gid = (ulong)get_global_id(0);
 
     if (gid >= nonce_count)
-        return;
-
-    if (result->found != 0)
         return;
 
     /*
