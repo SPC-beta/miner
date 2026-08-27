@@ -1599,16 +1599,19 @@ static inline ulong2 tower_to_flat_kernel(ulong2 v)
 {
     ulong2 r = (ulong2)(0UL, 0UL);
 
-    for (uint chunk = 0; chunk < 32; ++chunk) {
-        uint nib;
+    /*
+     * The two halves are handled separately so the hot nonce path has
+     * no per-iteration half-selection branch and no (chunk - 16)
+     * expression. The lookup table and field mapping are unchanged.
+     */
+    for (uint chunk = 0; chunk < 16; ++chunk) {
+        const uint nib = (uint)((v.x >> (4U * chunk)) & 0xFUL);
+        r ^= TOWER_TO_FLAT[chunk * 16U + nib];
+    }
 
-        if (chunk < 16)
-            nib = (uint)((v.x >> (4 * chunk)) & 0xFUL);
-        else
-            nib = (uint)((v.y >> (4 * (chunk - 16))) & 0xFUL);
-
-        ulong2 x = TOWER_TO_FLAT[chunk * 16 + nib];
-        r ^= x;
+    for (uint chunk = 0; chunk < 16; ++chunk) {
+        const uint nib = (uint)((v.y >> (4U * chunk)) & 0xFUL);
+        r ^= TOWER_TO_FLAT[(chunk + 16U) * 16U + nib];
     }
 
     return r;
@@ -1697,9 +1700,11 @@ __kernel void poseidon2b_miner_search(
     nonce.y = nonce_start_hi + (nonce.x < nonce_start_lo);
 
     /*
-     * Copy the 16 template fields and replace field 10.
+     * Materialize the immutable template once in private storage for this
+     * work-item. Field 10 is the only nonce-dependent field.
      *
-     * gf128 is represented by ulong2 in the existing kernel.
+     * Keeping the complete template local avoids repeatedly fetching the
+     * same 15 global fields during the eight absorb/permutation blocks.
      */
     gf128 fields[16];
 
@@ -1707,7 +1712,7 @@ __kernel void poseidon2b_miner_search(
         fields[i] = template_fields[i];
 
     {
-        ulong2 nflat = tower_to_flat_kernel(nonce);
+        const ulong2 nflat = tower_to_flat_kernel(nonce);
         fields[10].lo = nflat.x;
         fields[10].hi = nflat.y;
     }
