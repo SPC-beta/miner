@@ -1706,6 +1706,11 @@ __kernel void poseidon2b_miner_search(
      * Keeping the complete template local avoids repeatedly fetching the
      * same 15 global fields during the eight absorb/permutation blocks.
      */
+    /*
+     * A/B diagnostic:
+     * use the original release-kernel field materialization exactly.
+     * Only target checking remains disabled in this debug kernel.
+     */
     gf128 fields[16];
 
     for (uint i = 0; i < 16; ++i)
@@ -1814,8 +1819,10 @@ __kernel void poseidon2b_miner_search(
     const ulong2 target23 =
         (ulong2)(target[2], target[3]);
 
-    if (!le256_lt4(tower_hi, tower_lo, target01, target23))
-        return;
+    /*
+     * DEBUG: skip target comparison.
+     * This kernel is used only to expose the digest for a known nonce.
+     */
 
     /*
      * Publish the first valid solution for this work.
