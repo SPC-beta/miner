@@ -7,7 +7,7 @@ use std::time::Instant;
 const FIELDS: [u128; 16] = [
     0, 0, 0x71c2328d44b06a2c6a831c6112377f5c,
     0x9284c9a5d61c3321538a0e5613324ef0, 0, 0,
-    0x6a887600, 0, 0, 0, 0x6e0a, 0, 0x40000000000000000000000000000000,
+    0x6a887600, 0, 0, 0, 0x6e0a, 0, 0x00004000000000000000000000000000,
     0x18, 0, 0,
 ];
 
@@ -23,6 +23,12 @@ fn main() {
             &FIELDS.map(Block128::from), 10);
         let mut out = [[0u8; 32]; 1];
         h.hash_into(a + i as u128, &mut out);
+
+        if a + i as u128 == 28170 {
+            println!("DEBUG nonce: 28170");
+            println!("DEBUG digest: {:02x?}", out[0]);
+        }
+
         if out[0].iter().rev().zip(target.iter().rev()).find(|(x,y)| x != y)
             .map(|(x,y)| x < y).unwrap_or(false) { Some((a+i as u128, out[0])) } else { None }
     }).collect::<Vec<_>>();
