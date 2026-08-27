@@ -1707,20 +1707,13 @@ __kernel void poseidon2b_miner_search(
      * same 15 global fields during the eight absorb/permutation blocks.
      */
     /*
-     * A/B diagnostic:
-     * use the original release-kernel field materialization exactly.
-     * Only target checking remains disabled in this debug kernel.
+     * Nonce-only work item.
+     *
+     * Keep invariant template fields in global memory and substitute
+     * the nonce only for field 10.
      */
-    gf128 fields[16];
-
-    for (uint i = 0; i < 16; ++i)
-        fields[i] = template_fields[i];
-
-    {
-        const ulong2 nflat = tower_to_flat_kernel(nonce);
-        fields[10].lo = nflat.x;
-        fields[10].hi = nflat.y;
-    }
+    const ulong2 nonce_flat = tower_to_flat_kernel(nonce);
+    const gf128 nonce_field = (gf128){ nonce_flat.x, nonce_flat.y };
 
     /*
      * POWHDR__ capacity IV.
@@ -1780,8 +1773,14 @@ __kernel void poseidon2b_miner_search(
                 expected_generation) != expected_generation)
             return;
 
-        state[0] = gf_xor(state[0], fields[2 * b]);
-        state[1] = gf_xor(state[1], fields[2 * b + 1]);
+        const uint i0 = 2 * b;
+        const uint i1 = i0 + 1;
+
+        const gf128 f0 = (i0 == 10) ? nonce_field : template_fields[i0];
+        const gf128 f1 = (i1 == 10) ? nonce_field : template_fields[i1];
+
+        state[0] = gf_xor(state[0], f0);
+        state[1] = gf_xor(state[1], f1);
 
         poseidon2b_permute(state);
 
@@ -1819,10 +1818,8 @@ __kernel void poseidon2b_miner_search(
     const ulong2 target23 =
         (ulong2)(target[2], target[3]);
 
-    /*
-     * DEBUG: skip target comparison.
-     * This kernel is used only to expose the digest for a known nonce.
-     */
+    if (!le256_lt4(tower_hi, tower_lo, target01, target23))
+        return;
 
     /*
      * Publish the first valid solution for this work.
