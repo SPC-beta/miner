@@ -1666,11 +1666,27 @@ __kernel void poseidon2b_miner_search(
     ulong nonce_start_hi,
     ulong nonce_count,
     __global const ulong *target,
-    __global miner_result *result)
+    __global miner_result *result,
+    __global volatile uint *work_generation,
+    uint expected_generation)
 {
     const ulong gid = (ulong)get_global_id(0);
 
     if (gid >= nonce_count)
+        return;
+
+    /*
+     * Work cancellation / generation check.
+     *
+     * The host changes work_generation when the current work becomes
+     * stale. atomic_cmpxchg(..., expected, expected) provides an
+     * atomic read compatible with the existing OpenCL 1.x-style
+     * global atomic usage.
+     */
+    if (atomic_cmpxchg(
+            (__global volatile uint *)work_generation,
+            expected_generation,
+            expected_generation) != expected_generation)
         return;
 
     /*
@@ -1745,10 +1761,28 @@ __kernel void poseidon2b_miner_search(
      *     permutation
      */
     for (uint b = 0; b < 8; ++b) {
+        /*
+         * Stop stale work before another absorb/permutation block.
+         */
+        if (atomic_cmpxchg(
+                (__global volatile uint *)work_generation,
+                expected_generation,
+                expected_generation) != expected_generation)
+            return;
+
         state[0] = gf_xor(state[0], fields[2 * b]);
         state[1] = gf_xor(state[1], fields[2 * b + 1]);
 
         poseidon2b_permute(state);
+
+        /*
+         * Do not publish a result from stale work.
+         */
+        if (atomic_cmpxchg(
+                (__global volatile uint *)work_generation,
+                expected_generation,
+                expected_generation) != expected_generation)
+            return;
     }
 
     /*
@@ -1779,29 +1813,22 @@ __kernel void poseidon2b_miner_search(
         return;
 
     /*
-     * First valid result wins.
+     * Publish the first valid solution for this work.
      *
-     * The result is only published after the digest has passed
-     * the target comparison.
-     */
-    /*
-     * Publish the first valid solution to the host.
-     *
-     * found is a publication flag only. It is NOT a global
-     * mining cancellation flag. Other work-items continue
-     * processing their assigned nonces.
+     * found is a result-publication guard only. It does not cancel
+     * the kernel or invalidate other work-items.
      */
     if (atomic_cmpxchg(
             (__global volatile uint *)&result->found,
             0U,
-            1U) == 0U)
-    {
-        result->nonce_lo = nonce.x;
-        result->nonce_hi = nonce.y;
+            1U) != 0U)
+        return;
 
-        result->digest[0] = tower_hi.x;
-        result->digest[1] = tower_hi.y;
-        result->digest[2] = tower_lo.x;
-        result->digest[3] = tower_lo.y;
-    }
+    result->nonce_lo = nonce.x;
+    result->nonce_hi = nonce.y;
+
+    result->digest[0] = tower_hi.x;
+    result->digest[1] = tower_hi.y;
+    result->digest[2] = tower_lo.x;
+    result->digest[3] = tower_lo.y;
 }
