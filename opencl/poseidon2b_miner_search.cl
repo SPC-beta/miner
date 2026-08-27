@@ -1784,17 +1784,24 @@ __kernel void poseidon2b_miner_search(
      * The result is only published after the digest has passed
      * the target comparison.
      */
+    /*
+     * Publish the first valid solution to the host.
+     *
+     * found is a publication flag only. It is NOT a global
+     * mining cancellation flag. Other work-items continue
+     * processing their assigned nonces.
+     */
     if (atomic_cmpxchg(
             (__global volatile uint *)&result->found,
             0U,
-            1U) != 0U)
-        return;
+            1U) == 0U)
+    {
+        result->nonce_lo = nonce.x;
+        result->nonce_hi = nonce.y;
 
-    result->nonce_lo = nonce.x;
-    result->nonce_hi = nonce.y;
-
-    result->digest[0] = tower_hi.x;
-    result->digest[1] = tower_hi.y;
-    result->digest[2] = tower_lo.x;
-    result->digest[3] = tower_lo.y;
+        result->digest[0] = tower_hi.x;
+        result->digest[1] = tower_hi.y;
+        result->digest[2] = tower_lo.x;
+        result->digest[3] = tower_lo.y;
+    }
 }
