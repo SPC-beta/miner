@@ -1,7 +1,7 @@
 /*
- * pool-OpenCL-test
+ * pool-opencl-test
  *
- * OpenCL OpenCL Poseidon2b PoW range tester.
+ * External OpenCL Poseidon2b PoW range tester.
  *
  * Usage:
  *   pool_pow <nonce_start> <nonce_end> <target_hex_le>
@@ -40,7 +40,7 @@ type ClKernel = *mut c_void;
 type ClMem = *mut c_void;
 
 const CL_SUCCESS: ClInt = 0;
-const CL_DEVICE_TYPE_OpenCL: ClDeviceType = 1 << 2;
+const CL_DEVICE_TYPE_GPU: ClDeviceType = 1 << 2;
 const CL_DEVICE_NAME: usize = 0x102B;
 
 const CL_MEM_READ_WRITE: ClMemFlags = 1 << 0;
@@ -620,17 +620,17 @@ fn main() {
         check(
             (oc.get_device_ids)(
                 platform,
-                CL_DEVICE_TYPE_OpenCL,
+                CL_DEVICE_TYPE_GPU,
                 1,
                 devices.as_mut_ptr(),
                 &mut device_count,
             ),
-            "clGetDeviceIDs(OpenCL)",
+            "clGetDeviceIDs(GPU)",
         );
     }
 
     if device_count == 0 {
-        die("no OpenCL OpenCL device");
+        die("no OpenCL GPU device");
     }
 
     let device = devices[0];
@@ -654,7 +654,7 @@ fn main() {
     let name_len = name_size.min(name.len()).saturating_sub(1);
 
     println!(
-        "OpenCL OpenCL:   {}",
+        "OpenCL GPU:   {}",
         String::from_utf8_lossy(&name[..name_len])
     );
 
@@ -803,16 +803,11 @@ fn main() {
 
     check(err, "clCreateBuffer(target)");
 
-    // One result slot per work-item lets us dispatch a whole nonce batch and
-    // still collect every share found in that batch.
-    const BATCH_SIZE: usize = 4096;
-    let mut batch_results = vec![MinerMailbox::default(); BATCH_SIZE];
-
     let result_buf = unsafe {
         (oc.create_buffer)(
             context,
             CL_MEM_READ_WRITE,
-            std::mem::size_of_val(&batch_results[..]),
+            std::mem::size_of::<MinerMailbox>(),
             ptr::null(),
             &mut err,
         )
@@ -850,8 +845,7 @@ fn main() {
      * host before that dispatch has completed. Therefore correctness and
      * immediate delivery take priority here over maximum throughput.
      */
-    // Workgroups share the nonce-independent Poseidon prefix in local memory.
-    let local = 64usize;
+    let local = 1usize;
     let start = Instant::now();
 
     let mut nonce = nonce_start;
@@ -861,10 +855,10 @@ fn main() {
     while nonce < nonce_end {
         let start_lo = nonce as u64;
         let start_hi = (nonce >> 64) as u64;
-        let nonce_count = ((nonce_end - nonce).min(BATCH_SIZE as u128)) as u64;
+        let nonce_count = 1u64;
         let expected_generation = generation;
 
-        batch_results[..nonce_count as usize].fill(MinerMailbox::default());
+        let mut mailbox = MinerMailbox::default();
 
         unsafe {
             check(
@@ -946,8 +940,8 @@ fn main() {
                     result_buf,
                     CL_TRUE,
                     0,
-                    std::mem::size_of_val(&batch_results[..nonce_count as usize]),
-                    batch_results.as_ptr() as *const c_void,
+                    std::mem::size_of::<MinerMailbox>(),
+                    &mailbox as *const _ as *const c_void,
                     0,
                     ptr::null(),
                     ptr::null_mut(),
@@ -961,7 +955,7 @@ fn main() {
                     kernel,
                     1,
                     ptr::null(),
-                    &(((nonce_count as usize + local - 1) / local) * local),
+                    &local,
                     &local,
                     0,
                     ptr::null(),
@@ -982,8 +976,8 @@ fn main() {
                     result_buf,
                     CL_TRUE,
                     0,
-                    std::mem::size_of_val(&batch_results[..nonce_count as usize]),
-                    batch_results.as_mut_ptr() as *mut c_void,
+                    std::mem::size_of::<MinerMailbox>(),
+                    &mut mailbox as *mut _ as *mut c_void,
                     0,
                     ptr::null(),
                     ptr::null_mut(),
@@ -992,10 +986,9 @@ fn main() {
             );
         }
 
-        total_hashes += nonce_count as u128;
+        total_hashes += 1;
 
-        for mailbox in batch_results[..nonce_count as usize].iter() {
-          if mailbox.found != 0 {
+        if mailbox.found != 0 {
             let found_nonce =
                 (mailbox.nonce_lo as u128) | ((mailbox.nonce_hi as u128) << 64);
 
@@ -1024,10 +1017,9 @@ fn main() {
             );
             println!("host delivery: IMMEDIATE");
             println!();
-          }
         }
 
-        nonce += nonce_count as u128;
+        nonce += 1;
     }
 
     let elapsed = start.elapsed();
