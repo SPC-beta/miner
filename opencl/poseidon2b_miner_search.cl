@@ -1587,19 +1587,19 @@ __constant ulong2 FLAT_TO_TOWER[512] = {
  *   digest = state[0] || state[1]
  */
 
-#define MAX_SOLUTIONS 64U
-
+/*
+ * Single-share mailbox.
+ *
+ * No fixed solution-count limit exists. The host dispatches one nonce at a
+ * time and reads this mailbox immediately after that dispatch completes.
+ */
 typedef struct {
+    uint found;
+    uint reserved[3];
     ulong nonce_lo;
     ulong nonce_hi;
     ulong digest[4];
-} miner_solution;
-
-typedef struct {
-    uint count;
-    uint reserved[3];
-    miner_solution solutions[MAX_SOLUTIONS];
-} miner_result;
+} miner_mailbox;
 
 static inline ulong2 tower_to_flat_kernel(ulong2 v)
 {
@@ -1675,7 +1675,7 @@ __kernel void poseidon2b_miner_search(
     ulong nonce_start_hi,
     ulong nonce_count,
     __global const ulong *target,
-    __global miner_result *result,
+    __global miner_mailbox *result,
     __global volatile uint *work_generation,
     uint expected_generation)
 {
@@ -1828,22 +1828,23 @@ __kernel void poseidon2b_miner_search(
         return;
 
     /*
-     * Publish every valid solution.
+     * Publish exactly one share to the host mailbox.
      *
-     * The atomic counter reserves a unique result slot.
-     * A valid share never terminates the work-item.
+     * There is no solution array and no MAX_SOLUTIONS cap. Because the host
+     * dispatches one nonce per kernel invocation, this work-item owns the
+     * mailbox for the invocation and can publish directly.
+     *
+     * The host waits only for this single nonce dispatch, then reads the
+     * mailbox immediately.
      */
-    const uint idx =
-        atomic_inc((__global volatile uint *)&result->count);
+    result->nonce_lo = nonce.x;
+    result->nonce_hi = nonce.y;
 
-    if (idx >= MAX_SOLUTIONS)
-        return;
+    result->digest[0] = tower_hi.x;
+    result->digest[1] = tower_hi.y;
+    result->digest[2] = tower_lo.x;
+    result->digest[3] = tower_lo.y;
 
-    result->solutions[idx].nonce_lo = nonce.x;
-    result->solutions[idx].nonce_hi = nonce.y;
-
-    result->solutions[idx].digest[0] = tower_hi.x;
-    result->solutions[idx].digest[1] = tower_hi.y;
-    result->solutions[idx].digest[2] = tower_lo.x;
-    result->solutions[idx].digest[3] = tower_lo.y;
+    mem_fence(CLK_GLOBAL_MEM_FENCE);
+    result->found = 1U;
 }
