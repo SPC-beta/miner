@@ -1587,12 +1587,18 @@ __constant ulong2 FLAT_TO_TOWER[512] = {
  *   digest = state[0] || state[1]
  */
 
+#define MAX_SOLUTIONS 64U
+
 typedef struct {
-    uint found;
-    uint reserved[3];
     ulong nonce_lo;
     ulong nonce_hi;
     ulong digest[4];
+} miner_solution;
+
+typedef struct {
+    uint count;
+    uint reserved[3];
+    miner_solution solutions[MAX_SOLUTIONS];
 } miner_result;
 
 static inline ulong2 tower_to_flat_kernel(ulong2 v)
@@ -1822,22 +1828,22 @@ __kernel void poseidon2b_miner_search(
         return;
 
     /*
-     * Publish the first valid solution for this work.
+     * Publish every valid solution.
      *
-     * found is a result-publication guard only. It does not cancel
-     * the kernel or invalidate other work-items.
+     * The atomic counter reserves a unique result slot.
+     * A valid share never terminates the work-item.
      */
-    if (atomic_cmpxchg(
-            (__global volatile uint *)&result->found,
-            0U,
-            1U) != 0U)
+    const uint idx =
+        atomic_inc((__global volatile uint *)&result->count);
+
+    if (idx >= MAX_SOLUTIONS)
         return;
 
-    result->nonce_lo = nonce.x;
-    result->nonce_hi = nonce.y;
+    result->solutions[idx].nonce_lo = nonce.x;
+    result->solutions[idx].nonce_hi = nonce.y;
 
-    result->digest[0] = tower_hi.x;
-    result->digest[1] = tower_hi.y;
-    result->digest[2] = tower_lo.x;
-    result->digest[3] = tower_lo.y;
+    result->solutions[idx].digest[0] = tower_hi.x;
+    result->solutions[idx].digest[1] = tower_hi.y;
+    result->solutions[idx].digest[2] = tower_lo.x;
+    result->solutions[idx].digest[3] = tower_lo.y;
 }
