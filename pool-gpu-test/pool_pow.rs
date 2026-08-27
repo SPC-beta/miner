@@ -40,9 +40,7 @@ type ClKernel = *mut c_void;
 type ClMem = *mut c_void;
 
 const CL_SUCCESS: ClInt = 0;
-const CL_DEVICE_TYPE_CPU: ClDeviceType = 1 << 1;
-const CL_DEVICE_TYPE_GPU: ClDeviceType = 1 << 2;
-const CL_DEVICE_TYPE_ALL: ClDeviceType = 0xFFFFFFFF;
+const CL_DEVICE_TYPE_OpenCL: ClDeviceType = 1 << 2;
 const CL_DEVICE_NAME: usize = 0x102B;
 
 const CL_MEM_READ_WRITE: ClMemFlags = 1 << 0;
@@ -622,7 +620,7 @@ fn main() {
         check(
             (oc.get_device_ids)(
                 platform,
-                CL_DEVICE_TYPE_GPU,
+                CL_DEVICE_TYPE_OpenCL,
                 1,
                 devices.as_mut_ptr(),
                 &mut device_count,
@@ -656,7 +654,7 @@ fn main() {
     let name_len = name_size.min(name.len()).saturating_sub(1);
 
     println!(
-        "OpenCL GPU found: {}",
+        "OpenCL OpenCL:   {}",
         String::from_utf8_lossy(&name[..name_len])
     );
 
