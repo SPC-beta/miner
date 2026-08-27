@@ -8,3 +8,11 @@ name = "pool_pow"
 path = "pool_pow.rs"
 
 [dependencies]
+noid_core = { path = "../rust-external-miner/noid_core" }
+noid_poseidon2b = { path = "../rust-external-miner/noid_poseidon2b" }
+rayon = "1.10"
+hex = "0.4"
+
+[[bin]]
+name = "pool_cpu_native"
+path = "pool_cpu_native.rs"
